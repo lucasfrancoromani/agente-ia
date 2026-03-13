@@ -60,8 +60,6 @@ client.on('message_create', async (message) => {
 
         // 2. Apagamos el filtro de "Agenda" temporalmente para la demo.
         // El bot ahora le va a contestar a absolutamente todos los números privados.
-
-        // 3. Sistema de memoria
         if (!sessions.has(chatId)) {
             sessions.set(chatId, {
                 botActivo: true, // Asumimos que todos son clientes por defecto
@@ -85,7 +83,7 @@ client.on('message_create', async (message) => {
                 session.botActivo = false;
                 console.log(`[IA PAUSADA] Intervención humana detectada en: ${chatId}`);
             }
-            return; 
+            return;
         }
 
         // Si la IA está pausada, no hace nada
