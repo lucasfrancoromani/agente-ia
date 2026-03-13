@@ -74,11 +74,18 @@ client.on('ready', () => {
 // Evento: Mensaje creado (entrante o saliente)
 client.on('message_create', async (message) => {
     try {
+        console.log('\n🔵 --- NUEVO MENSAJE RECIBIDO POR WA-WEB.JS ---');
+        console.log('De:', message.from, '| Para:', message.to);
+        console.log('Texto:', message.body);
+        console.log('Es de mi teléfono (saliente)?', message.fromMe);
+        console.log('Es un Estado de WA?', message.isStatus);
+
         const chatId = message.fromMe ? message.to : message.from;
         const userText = message.body;
 
         // 1. Filtro de Grupos y Estados (Súper estricto: Solo chats 1 a 1)
         if (!chatId.endsWith('@c.us') || message.isStatus) {
+            console.log('❌ IGNORADO: Es un grupo o estado.');
             return; 
         }
 
