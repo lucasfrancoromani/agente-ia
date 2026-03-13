@@ -2,8 +2,21 @@ require('dotenv').config();
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const OpenAI = require('openai');
+const http = require('http'); // Añadido para que Railway no apague el bot
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
+// Crear un servidor web "fantasma" en el puerto que pide Railway
+// Esto es obligatorio en Railway porque de lo contrario asume que la app falló y la mata (SIGTERM)
+const port = process.env.PORT || 3000;
+const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Bot de WhatsApp funcionando correctamente en Railway.\n');
+});
+
+server.listen(port, () => {
+    console.log(`🌍 Servidor web fantasma escuchando en el puerto ${port} (Para Railway)`);
+});
 
 const SYSTEM_PROMPT = `"Eres el asistente virtual de reservas del 'Restaurante La Playa' en Gandia. Tu tono es cálido, súper amable y hospitalario, como el mejor anfitrión de la ciudad.
 Tu objetivo es tomar 4 DATOS OBLIGATORIOS: Día, Hora, Cantidad de Personas y el NOMBRE de quien reserva.
