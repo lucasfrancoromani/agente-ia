@@ -84,7 +84,8 @@ client.on('message_create', async (message) => {
         const userText = message.body;
 
         // 1. Filtro de Grupos y Estados (Súper estricto: Solo chats 1 a 1)
-        if (!chatId.endsWith('@c.us') || message.isStatus) {
+        // Acepta números tradicionales (@c.us) y el nuevo backend Multi-Dispositivo de WA (@lid)
+        if ((!chatId.endsWith('@c.us') && !chatId.endsWith('@lid')) || message.isStatus) {
             console.log('❌ IGNORADO: Es un grupo o estado.');
             return; 
         }
