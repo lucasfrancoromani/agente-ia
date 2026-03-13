@@ -30,6 +30,9 @@ const sessions = new Map();
 // Crear instancia del cliente de WhatsApp
 const client = new Client({
     authStrategy: new LocalAuth(),
+    puppeteer: {
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+    }
 });
 
 // Evento: Generación de QR
