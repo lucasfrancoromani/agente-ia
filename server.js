@@ -50,98 +50,60 @@ client.on('ready', () => {
 // Evento: Mensaje creado (entrante o saliente)
 client.on('message_create', async (message) => {
     try {
-        // Si el mensaje es saliente (enviado por el dueño), el destinatario es 'message.to'
-        // Si el mensaje es entrante (enviado por el cliente), el remitente es 'message.from'
         const chatId = message.fromMe ? message.to : message.from;
         const userText = message.body;
 
-        // Filtro de grupos: ignorar si no es un mensaje privado
-        if (!chatId.endsWith('@c.us')) {
-            return;
+        // 1. Filtro de Grupos y Estados (Súper estricto: Solo chats 1 a 1)
+        if (!chatId.endsWith('@c.us') || message.isStatus) {
+            return; 
         }
 
-        // Filtro de Agenda: si está en los contactos del teléfono, ignorarlo
-        const contact = await message.getContact();
-        if (contact.isMyContact) {
-            return;
-        }
+        // 2. Apagamos el filtro de "Agenda" temporalmente para la demo.
+        // El bot ahora le va a contestar a absolutamente todos los números privados.
 
-        // 1- En el sistema de memoria, inicializamos objeto con botActivo en true
+        // 3. Sistema de memoria
         if (!sessions.has(chatId)) {
-            let isCliente = true;
-
-            // Clasificación Silenciosa (Solo para números no guardados que escriben por primera vez)
-            if (!message.fromMe) {
-                try {
-                    const promptClasificacion = "Clasifica este mensaje de WhatsApp que llegó a un restaurante. Si el usuario pide reservar, pregunta horarios, menú o ubicación, responde únicamente 'CLIENTE'. Si el usuario parece un proveedor, ofrece servicios, es spam o habla de temas ajenos a comer en el local, responde únicamente 'OTRO'. REGLA VITAL: Si el mensaje es únicamente un saludo genérico (como 'Hola', 'Buenos días', '¿Qué tal?'), asume que es un comensal y clasifícalo como 'CLIENTE' por defecto.";
-                    const clasificacionReq = await openai.chat.completions.create({
-                        model: "gpt-4o-mini",
-                        messages: [
-                            { role: 'system', content: promptClasificacion },
-                            { role: 'user', content: userText }
-                        ],
-                    });
-
-                    const respuestaClasificacion = clasificacionReq.choices[0].message.content.trim();
-                    if (respuestaClasificacion === 'OTRO') {
-                        isCliente = false;
-                    }
-                } catch (err) {
-                    console.log('Error en la clasificación silenciada. Se asume CLIENTE:', err);
-                }
-            }
-
             sessions.set(chatId, {
-                botActivo: isCliente,
+                botActivo: true, // Asumimos que todos son clientes por defecto
                 ultimoMensajeBot: "",
                 history: [
                     { role: 'system', content: SYSTEM_PROMPT }
                 ]
             });
-
-            // Si se identificó como OTRO, ignoramos el mensaje y silencíamos definitivamente al bot
-            if (!isCliente && !message.fromMe) {
-                console.log(`[Clasificación] Etiquetado como OTRO para el remitente ${chatId}. Bot silenciado.`);
-                return;
-            }
         }
 
         const session = sessions.get(chatId);
 
-        // 3- Lógica de Silencio (fromMe)
+        // 4. Lógica de Silencio (Si VOS escribís desde el WhatsApp del restaurante)
         if (message.fromMe) {
             if (userText === '!bot on') {
                 session.botActivo = true;
-                console.log(`[Bot Activado] Reanudando IA para: ${chatId}`);
+                console.log(`[IA ACTIVADA] para: ${chatId}`);
             } else if (userText === session.ultimoMensajeBot) {
-                return; // Es el propio bot hablando, ignoramos
+                return; // Es el bot hablando, lo ignoramos
             } else {
                 session.botActivo = false;
-                console.log(`[Bot Silenciado] Intervención humana detectada hacia: ${chatId}`);
+                console.log(`[IA PAUSADA] Intervención humana detectada en: ${chatId}`);
             }
-            return; // Nunca respondemos a nuestros propios mensajes
+            return; 
         }
 
-        // 4- Lógica de Respuesta de clientes
+        // Si la IA está pausada, no hace nada
         if (session.botActivo === false) {
-            // El bot está silenciado
             return;
         }
 
-        console.log(`[Mensaje Recibido] De: ${chatId} | Texto: ${userText}`);
+        console.log(`[✉️ MENSAJE] De: ${chatId} | Texto: ${userText}`);
 
-        // 1. Generar respuesta con la IA de OpenAI pasando el contexto por número
+        // Llamamos a OpenAI
         const responseText = await getOpenAIResponse(chatId, userText);
-        console.log(`[Respuesta IA] Para: ${chatId} | Texto: ${responseText}`);
+        console.log(`[🤖 RESPUESTA IA] Para: ${chatId} | Texto: ${responseText}`);
 
-        // Actualizar el último mensaje del bot en la sesión
         session.ultimoMensajeBot = responseText;
-
-        // 2. Enviar la respuesta vía mensaje a WhatsApp
         await message.reply(responseText);
 
     } catch (error) {
-        console.error('Error al procesar el mensaje:', error);
+        console.error('Error fatal al procesar el mensaje:', error);
     }
 });
 
