@@ -3,6 +3,7 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const OpenAI = require('openai');
 const http = require('http'); // Añadido para que Railway no apague el bot
+const puppeteer = require('puppeteer'); // Requerimos puppeteer entero para sacar la ruta exacta de Chromium
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
@@ -44,9 +45,8 @@ const sessions = new Map();
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
-        // En Railway y entornos Linux sin interfaz gráfica, a veces Puppeteer no encuentra Chromium a menos que se le indique.
-        // Además de --no-sandbox, usaremos /usr/bin/chromium como fallback si existe en la imagen (instalado vía nixpacks)
-        executablePath: process.env.RAILWAY_ENVIRONMENT ? '/usr/bin/chromium' : undefined,
+        // Obligamos a usar exactamente el binario que npm descargó durante el build en Railway
+        executablePath: puppeteer.executablePath(),
         args: [
             '--no-sandbox', 
             '--disable-setuid-sandbox',
