@@ -37,9 +37,9 @@ const client = new Client({
 
 // Evento: Generación de QR
 client.on('qr', (qr) => {
-    // Imprimir el QR en la terminal
+    console.log('👇👇 COPIA ESTE TEXTO LARGO 👇👇');
+    console.log(qr);
     qrcode.generate(qr, { small: true });
-    console.log('^ Escanea el código QR de arriba con tu WhatsApp para iniciar sesión.');
 });
 
 // Evento: Cliente listo
