@@ -44,7 +44,18 @@ const sessions = new Map();
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
+        // En Railway y entornos Linux sin interfaz gráfica, a veces Puppeteer no encuentra Chromium a menos que se le indique.
+        // Además de --no-sandbox, usaremos /usr/bin/chromium como fallback si existe en la imagen (instalado vía nixpacks)
+        executablePath: process.env.RAILWAY_ENVIRONMENT ? '/usr/bin/chromium' : undefined,
+        args: [
+            '--no-sandbox', 
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--no-zygote',
+            '--disable-gpu'
+        ]
     }
 });
 
