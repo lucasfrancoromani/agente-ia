@@ -50,21 +50,27 @@ client.on('ready', () => {
 // Evento: Mensaje creado (entrante o saliente)
 client.on('message_create', async (message) => {
     try {
-        // Si el mensaje es saliente (enviado por el dueño), el destinatario es 'message.to'
-        // Si el mensaje es entrante (enviado por el cliente), el remitente es 'message.from'
+        console.log('\n🔵 --- NUEVO MENSAJE EN EL RADAR ---');
+        console.log('De:', message.from, ' | Para:', message.to);
+        console.log('Texto:', message.body);
+
         const chatId = message.fromMe ? message.to : message.from;
         const userText = message.body;
 
         // Filtro de grupos: ignorar si no es un mensaje privado
         if (!chatId.endsWith('@c.us')) {
+            console.log('❌ MENSAJE IGNORADO: No es un chat privado.');
             return;
         }
+        console.log('✅ Pasó el filtro de grupos.');
 
         // Filtro de Agenda: si está en los contactos del teléfono, ignorarlo
         const contact = await message.getContact();
         if (contact.isMyContact) {
+            console.log('❌ MENSAJE IGNORADO: Está en la agenda de contactos.');
             return;
         }
+        console.log('✅ Pasó el filtro de agenda (Desconocido).');
 
         // 1- En el sistema de memoria, inicializamos objeto con botActivo en true
         if (!sessions.has(chatId)) {
