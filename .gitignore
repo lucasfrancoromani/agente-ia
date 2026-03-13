@@ -1,0 +1,12 @@
+# Dependencias
+node_modules/
+
+# Variables de entorno (Secretos)
+.env
+
+# Archivos temporales y de sesión de Whatsapp Web JS
+.wwebjs_auth/
+.wwebjs_cache/
+
+# Otros archivos basura del sistema
+.DS_Store
