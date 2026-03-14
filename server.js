@@ -90,8 +90,16 @@ client.on('message_create', async (message) => {
             return; 
         }
 
-        // 2. Apagamos el filtro de "Agenda" temporalmente para la demo.
-        // El bot ahora le va a contestar a absolutamente todos los números privados.
+        // 2. Filtro de Agenda: Ignorar si está guardado en los contactos del teléfono de La Playa (ej: proveedores)
+        try {
+            const contact = await message.getContact();
+            if (contact.isMyContact) {
+                console.log(`❌ IGNORADO: El contacto ${chatId} está agendado.`);
+                return;
+            }
+        } catch (err) {
+            console.error('Error al verificar contacto en la agenda:', err);
+        }
         if (!sessions.has(chatId)) {
             sessions.set(chatId, {
                 botActivo: true, // Asumimos que todos son clientes por defecto
