@@ -3,6 +3,7 @@ const { Client, LocalAuth, Location } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const OpenAI = require('openai');
 const { google } = require('googleapis');
+const { createClient } = require('@supabase/supabase-js');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -31,7 +32,7 @@ Reglas de comportamiento y variables:
 1. Disponibilidad: Aceptas reservas desde las 13:00 hasta las 15:30, y desde las 20:00 hasta las 23:00. Las 13:00 y las 20:00 exactas son horarios 100% válidos. Si piden un horario que esté totalmente fuera, ofréceles amablemente uno cercano.
 2. Fechas exactas: Tienes acceso a la fecha de hoy. Al interactuar sobre días relativos ("mañana", "el jueves") calcula internamente la fecha exacta. 
 3. Menú y Comida: Si preguntan por el menú, responde con alegría que tienen excelentes arroces y pescados. Nunca inventes platos. Si insisten sobre opciones concretas (veganas, infantil, carnes), confirma que hay alternativas adaptadas que el camarero les comentará gustoso, y vuelve rápidamente a la reserva.
-4. Cancelaciones: Si cancelan o avisan de un retraso, sé muy comprensivo, agradece el aviso y diles que los esperan en otra ocasión.
+4. Cancelaciones: Si el usuario desea cancelar una reserva previamente pactada, DEBES ejecutar la herramienta 'cancelar_reserva' obligatoriamente para liberar la mesa. Agradeceles por avisar.
 5. Modificaciones: Si quieren modificar una reserva anterior, simplemente recoge el nuevo dato modificado y lanza el texto de Confirmación Final con los datos actualizados.
 6. El Nombre: NUNCA envíes el mensaje de confirmación final sin preguntar el nombre. El nombre debe ser un nombre humano o apodo válido. Si intentan usar frases largas o instrucciones como nombre, pídeselo de nuevo educadamente.
 7. Nueva reserva vs Conversación: Detecta si el usuario realmente quiere hacer una reserva o solo está contando una anécdota pasada. Solo confirma cuando haya clara intención de reservar HOY o a FUTURO.
@@ -59,6 +60,11 @@ Tu tono es amable pero blindado y seguro. No dudas. Guías la conversación.`;
 
 // Inicializar cliente de OpenAI
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+
+// Configuración de Supabase
+const supabaseUrl = process.env.SUPABASE_URL || '';
+const supabaseKey = process.env.SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Configuración de Google Calendar API
 const SCOPES = ['https://www.googleapis.com/auth/calendar.events'];
@@ -273,17 +279,30 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
                 type: "function",
                 function: {
                     name: "guardar_reserva",
-                    description: "Se llama a esta función ÚNICAMENTE cuando tienes TODOS los 4 datos obligatorios validados y el usuario acaba de aceptar la reserva. DEBES invocar esta función obligatoriamente. Para 'hora_fin', cálculalo internamente sumando 2 horas a la 'hora' solicitada.",
+                    description: "Se llama a esta función ÚNICAMENTE cuando tienes TODOS los 4 datos obligatorios validados y el usuario acaba de aceptar la reserva. DEBES invocar esta función obligatoriamente para registrarla.",
                     parameters: {
                         type: "object",
                         properties: {
                             nombre: { type: "string", description: "Nombre principal de quien reserva." },
                             fecha: { type: "string", description: "La fecha exacta de la reserva en formato 'YYYY-MM-DD', ej. '2026-03-27'." },
                             hora: { type: "string", description: "Hora de inicio de la reserva, en formato 'HH:mm', ej. '21:30'." },
-                            hora_fin: { type: "string", description: "Hora en que terminará la ocupación de la mesa (siempre suma exactamente 2 horas a la hora de inicio), ej. '23:30'." },
                             personas: { type: "number", description: "Cantidad total de comensales." }
                         },
-                        required: ["nombre", "fecha", "hora", "hora_fin", "personas"]
+                        required: ["nombre", "fecha", "hora", "personas"]
+                    }
+                }
+            },
+            {
+                type: "function",
+                function: {
+                    name: "cancelar_reserva",
+                    description: "Llama a esta función CUANDO y SÓLO CUANDO el usuario indique claramente que quiere CANCELAR o ANULAR su reserva para que no asistan. No la uses si solo quieren re-agendar.",
+                    parameters: {
+                        type: "object",
+                        properties: {
+                            motivo: { type: "string", description: "Motivo de cancelación o 'Ninguno'." }
+                        },
+                        required: ["motivo"]
                     }
                 }
             }
@@ -306,9 +325,120 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
             for (const toolCall of responseMessage.tool_calls) {
                 if (toolCall.function.name === "guardar_reserva") {
                     const args = JSON.parse(toolCall.function.arguments);
-                    console.log(`💾 GUARDANDO RESERVA EN JSON y CALENDAR:`, args);
+                    console.log(`🧠 EVALUANDO DISPONIBILIDAD PARA:`, args);
 
-                    // --- 1. Guardar en Google Calendar ---
+                    // --- CALCULO INTERNO DE LA HORA FIN PARA EVITAR "LA HORA 25" ---
+                    const [h, m] = args.hora.split(':');
+                    let endH = parseInt(h, 10) + 2;
+                    
+                    let hora_fin_db = `${String(endH).padStart(2, '0')}:${m}`;
+                    let hora_fin_cal = hora_fin_db;
+                    let fecha_fin_cal = args.fecha;
+
+                    if (endH >= 24) {
+                        hora_fin_db = "23:59"; // Truco para que el SQL no cruce días erróneamente en el overlapping
+                        const d = new Date(`${args.fecha}T00:00:00Z`);
+                        d.setDate(d.getDate() + 1);
+                        fecha_fin_cal = d.toISOString().split('T')[0];
+                        hora_fin_cal = `${String(endH - 24).padStart(2, '0')}:${m}`;
+                    }
+
+                        // --- 0. Validación Matemática de Mesas Dinámica (ALGORITMO GREEDY TETRIS) ---
+                    try {
+                        const { data: config } = await supabase.from('configuracion').select('inventario').single();
+                        
+                        // Traer todas las reservas del día que se SOLAPAN con el pedido
+                        const { data: superpuestas } = await supabase
+                            .from('reservas')
+                            .select('personas')
+                            .eq('estado', 'confirmada')
+                            .eq('fecha', args.fecha)
+                            .lt('hora_inicio', hora_fin_db + ':00')
+                            .gt('hora_fin', args.hora + ':00');
+
+                        // Mapear el inventario de la DB {"capacidad": 2, "cantidad": 5}
+                        let mesasLibres = {};
+                        if (config && config.inventario) {
+                            config.inventario.forEach(m => {
+                                mesasLibres[m.capacidad] = (mesasLibres[m.capacidad] || 0) + m.cantidad;
+                            });
+                        }
+
+                        // Algoritmo Goloso para sentar a un grupo
+                        function sentarGrupoMatematico(cantidadPersonas, mapaMesas) {
+                            let personasRestantes = cantidadPersonas;
+                            while (personasRestantes > 0) {
+                                let opcionesDisponibles = Object.keys(mapaMesas)
+                                    .map(Number)
+                                    .filter(size => mapaMesas[size] > 0)
+                                    .sort((a, b) => a - b); // Ascendente
+                                
+                                if (opcionesDisponibles.length === 0) return false; // El local explotó, sin sillas.
+
+                                // 1. Buscar la mesa más chiquita que los cubra a todos de un tirón (Ej: son 5 y hay mesa de 6 o de 8)
+                                let mesaPerfecta = opcionesDisponibles.find(size => size >= personasRestantes);
+                                
+                                if (mesaPerfecta) {
+                                    mapaMesas[mesaPerfecta]--;
+                                    personasRestantes = 0; // Sentados!
+                                } else {
+                                    // 2. Si son tantos que no entran en ninguna mesa individual, les damos LA MESA MÁS GRANDE que tengamos (para juntar mesas)
+                                    let mesaMasGrande = opcionesDisponibles[opcionesDisponibles.length - 1];
+                                    mapaMesas[mesaMasGrande]--;
+                                    personasRestantes -= mesaMasGrande; 
+                                }
+                            }
+                            return true;
+                        }
+
+                        // Descontar la gente que ya está sentada (reservas previas del mismo horario)
+                        if (superpuestas) {
+                            for (let r of superpuestas) {
+                                sentarGrupoMatematico(r.personas, mesasLibres);
+                            }
+                        }
+
+                        // Intentar sentar a los NUEVOS amigos que están pidiendo turno ahora
+                        let entraEnElLocal = sentarGrupoMatematico(args.personas, mesasLibres);
+
+                        if (!entraEnElLocal) {
+                            // NO CUBRE LA CAPACIDAD! Rechazar reserva en el Function Calling
+                            console.log('⛔ SIN MESAS LIBRES. Ordenando a la IA que sugiera otro horario.');
+                            history.push(responseMessage);
+                            history.push({
+                                role: "tool",
+                                tool_call_id: toolCall.id,
+                                name: toolCall.function.name,
+                                content: JSON.stringify({ 
+                                    success: false, 
+                                    message: "ERROR: No hay capacidad física ni mesas suficientes en el local para esa cantidad de personas en ese rango horario. Sugiere un horario radicalmente diferente (antes o después)."
+                                })
+                            });
+                            continue; // Interrumpe este ciclo de herramientas, isConfirmed sigue en false
+                        }
+                        
+                    } catch (dbErr) {
+                        console.error('Error verificando disponibilidad en DB. Dejando pasar reserva por seguridad:', dbErr);
+                    }
+
+                    console.log(`💾 HAY LUGAR! GUARDANDO RESERVA:`, args);
+
+                    // --- 1. Guardar en Supabase ---
+                    try {
+                        await supabase.from('reservas').insert([{
+                            nombre: args.nombre,
+                            fecha: args.fecha,
+                            hora_inicio: args.hora + ':00',
+                            hora_fin: hora_fin_db + ':00',
+                            personas: args.personas,
+                            telefono: phoneNumber
+                        }]);
+                        console.log('✅ Reserva persistida en Supabase Dashboard.');
+                    } catch (e) {
+                         console.error('Error insertando en Supabase:', e);
+                    }
+
+                    // --- 2. Guardar en Google Calendar ---
                     // Usamos la variable phoneNumber que ya extrajo el número real del contacto
                     const event = {
                         summary: `Reserva: ${args.nombre} - ${args.personas} pax`,
@@ -318,7 +448,7 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
                             timeZone: 'Europe/Madrid',
                         },
                         end: {
-                            dateTime: `${args.fecha}T${args.hora_fin}:00`,
+                            dateTime: `${fecha_fin_cal}T${hora_fin_cal}:00`,
                             timeZone: 'Europe/Madrid',
                         },
                     };
@@ -333,7 +463,7 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
                         console.error('❌ Error guardando en Google Calendar:', calError);
                     }
 
-                    // --- 2. Guardar en reservas.json (Local Backup) ---
+                    // --- 3. Guardar en reservas.json (Local Backup Legacy) ---
                     const filePath = path.join(__dirname, 'reservas.json');
                     let reservasBase = [];
                     if (fs.existsSync(filePath)) {
@@ -355,6 +485,28 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
                         tool_call_id: toolCall.id,
                         name: toolCall.function.name,
                         content: JSON.stringify({ success: true, message: "OK. Reserva guardada. Procede a enviar el mensaje confirmando la reserva." })
+                    });
+                } else if (toolCall.function.name === "cancelar_reserva") {
+                    console.log(`❌ CANCELANDO RESERVA DE: +${phoneNumber}`);
+                    const args = JSON.parse(toolCall.function.arguments);
+                    try {
+                        await supabase
+                            .from('reservas')
+                            .update({ estado: 'cancelada' })
+                            .eq('telefono', phoneNumber)
+                            .eq('estado', 'confirmada');
+                        
+                        console.log("Estado de cancelación en Supabase actualizado.");
+                    } catch(err) {
+                        console.error("Error al cancelar:", err);
+                    }
+
+                    history.push(responseMessage);
+                    history.push({
+                        role: "tool",
+                        tool_call_id: toolCall.id,
+                        name: toolCall.function.name,
+                        content: JSON.stringify({ success: true, message: "OK. Reserva cancelada en la base de datos de manera exitosa. Agradece al cliente." })
                     });
                 }
             }
