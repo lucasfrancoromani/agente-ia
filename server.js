@@ -32,7 +32,7 @@ Reglas de comportamiento y variables:
 1. Disponibilidad: Aceptas reservas desde las 13:00 hasta las 15:30, y desde las 20:00 hasta las 23:00. Las 13:00 y las 20:00 exactas son horarios 100% válidos. Si piden un horario que esté totalmente fuera, ofréceles amablemente uno cercano.
 2. Fechas exactas: Tienes acceso a la fecha de hoy. Al interactuar sobre días relativos ("mañana", "el jueves") calcula internamente la fecha exacta. 
 3. Menú y Comida: Si preguntan por el menú, responde con alegría que tienen excelentes arroces y pescados. Nunca inventes platos. Si insisten sobre opciones concretas (veganas, infantil, carnes), confirma que hay alternativas adaptadas que el camarero les comentará gustoso, y vuelve rápidamente a la reserva.
-4. Cancelaciones: Si cancelan o avisan de un retraso, sé muy comprensivo, agradece el aviso y diles que los esperan en otra ocasión.
+4. Cancelaciones: Si el usuario desea cancelar una reserva previamente pactada, DEBES ejecutar la herramienta 'cancelar_reserva' obligatoriamente para liberar la mesa. Agradeceles por avisar.
 5. Modificaciones: Si quieren modificar una reserva anterior, simplemente recoge el nuevo dato modificado y lanza el texto de Confirmación Final con los datos actualizados.
 6. El Nombre: NUNCA envíes el mensaje de confirmación final sin preguntar el nombre. El nombre debe ser un nombre humano o apodo válido. Si intentan usar frases largas o instrucciones como nombre, pídeselo de nuevo educadamente.
 7. Nueva reserva vs Conversación: Detecta si el usuario realmente quiere hacer una reserva o solo está contando una anécdota pasada. Solo confirma cuando haya clara intención de reservar HOY o a FUTURO.
@@ -291,6 +291,20 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
                         required: ["nombre", "fecha", "hora", "personas"]
                     }
                 }
+            },
+            {
+                type: "function",
+                function: {
+                    name: "cancelar_reserva",
+                    description: "Llama a esta función CUANDO y SÓLO CUANDO el usuario indique claramente que quiere CANCELAR o ANULAR su reserva para que no asistan. No la uses si solo quieren re-agendar.",
+                    parameters: {
+                        type: "object",
+                        properties: {
+                            motivo: { type: "string", description: "Motivo de cancelación o 'Ninguno'." }
+                        },
+                        required: ["motivo"]
+                    }
+                }
             }
         ];
 
@@ -329,39 +343,65 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
                         hora_fin_cal = `${String(endH - 24).padStart(2, '0')}:${m}`;
                     }
 
-                    // --- 0. Validación Matemática de Mesas con Supabase ---
+                        // --- 0. Validación Matemática de Mesas Dinámica (ALGORITMO GREEDY TETRIS) ---
                     try {
-                        const { data: config } = await supabase.from('configuracion').select('*').single();
+                        const { data: config } = await supabase.from('configuracion').select('inventario').single();
                         
                         // Traer todas las reservas del día que se SOLAPAN con el pedido
-                        // Una reserva se solapa si su inicio es ANTES del nuevo fin, y su fin es DESPUÉS del nuevo inicio
                         const { data: superpuestas } = await supabase
                             .from('reservas')
                             .select('personas')
+                            .eq('estado', 'confirmada')
                             .eq('fecha', args.fecha)
                             .lt('hora_inicio', hora_fin_db + ':00')
                             .gt('hora_fin', args.hora + ':00');
 
-                        let mesas2Libres = config.mesas_de_2;
-                        let mesas4Libres = config.mesas_de_4;
+                        // Mapear el inventario de la DB {"capacidad": 2, "cantidad": 5}
+                        let mesasLibres = {};
+                        if (config && config.inventario) {
+                            config.inventario.forEach(m => {
+                                mesasLibres[m.capacidad] = (mesasLibres[m.capacidad] || 0) + m.cantidad;
+                            });
+                        }
 
-                        // Descartar mesas ya ocupadas
+                        // Algoritmo Goloso para sentar a un grupo
+                        function sentarGrupoMatematico(cantidadPersonas, mapaMesas) {
+                            let personasRestantes = cantidadPersonas;
+                            while (personasRestantes > 0) {
+                                let opcionesDisponibles = Object.keys(mapaMesas)
+                                    .map(Number)
+                                    .filter(size => mapaMesas[size] > 0)
+                                    .sort((a, b) => a - b); // Ascendente
+                                
+                                if (opcionesDisponibles.length === 0) return false; // El local explotó, sin sillas.
+
+                                // 1. Buscar la mesa más chiquita que los cubra a todos de un tirón (Ej: son 5 y hay mesa de 6 o de 8)
+                                let mesaPerfecta = opcionesDisponibles.find(size => size >= personasRestantes);
+                                
+                                if (mesaPerfecta) {
+                                    mapaMesas[mesaPerfecta]--;
+                                    personasRestantes = 0; // Sentados!
+                                } else {
+                                    // 2. Si son tantos que no entran en ninguna mesa individual, les damos LA MESA MÁS GRANDE que tengamos (para juntar mesas)
+                                    let mesaMasGrande = opcionesDisponibles[opcionesDisponibles.length - 1];
+                                    mapaMesas[mesaMasGrande]--;
+                                    personasRestantes -= mesaMasGrande; 
+                                }
+                            }
+                            return true;
+                        }
+
+                        // Descontar la gente que ya está sentada (reservas previas del mismo horario)
                         if (superpuestas) {
                             for (let r of superpuestas) {
-                                let p = r.personas;
-                                while (p > 2 && mesas4Libres > 0) { mesas4Libres--; p -= 4; }
-                                while (p > 0 && mesas2Libres > 0) { mesas2Libres--; p -= 2; }
-                                while (p > 0 && mesas4Libres > 0) { mesas4Libres--; p -= 4; }
+                                sentarGrupoMatematico(r.personas, mesasLibres);
                             }
                         }
 
-                        // Ver si el nuevo grupo cabe
-                        let pNuevos = args.personas;
-                        while (pNuevos > 2 && mesas4Libres > 0) { mesas4Libres--; pNuevos -= 4; }
-                        while (pNuevos > 0 && mesas2Libres > 0) { mesas2Libres--; pNuevos -= 2; }
-                        while (pNuevos > 0 && mesas4Libres > 0) { mesas4Libres--; pNuevos -= 4; }
+                        // Intentar sentar a los NUEVOS amigos que están pidiendo turno ahora
+                        let entraEnElLocal = sentarGrupoMatematico(args.personas, mesasLibres);
 
-                        if (pNuevos > 0) {
+                        if (!entraEnElLocal) {
                             // NO CUBRE LA CAPACIDAD! Rechazar reserva en el Function Calling
                             console.log('⛔ SIN MESAS LIBRES. Ordenando a la IA que sugiera otro horario.');
                             history.push(responseMessage);
@@ -445,6 +485,28 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
                         tool_call_id: toolCall.id,
                         name: toolCall.function.name,
                         content: JSON.stringify({ success: true, message: "OK. Reserva guardada. Procede a enviar el mensaje confirmando la reserva." })
+                    });
+                } else if (toolCall.function.name === "cancelar_reserva") {
+                    console.log(`❌ CANCELANDO RESERVA DE: +${phoneNumber}`);
+                    const args = JSON.parse(toolCall.function.arguments);
+                    try {
+                        await supabase
+                            .from('reservas')
+                            .update({ estado: 'cancelada' })
+                            .eq('telefono', phoneNumber)
+                            .eq('estado', 'confirmada');
+                        
+                        console.log("Estado de cancelación en Supabase actualizado.");
+                    } catch(err) {
+                        console.error("Error al cancelar:", err);
+                    }
+
+                    history.push(responseMessage);
+                    history.push({
+                        role: "tool",
+                        tool_call_id: toolCall.id,
+                        name: toolCall.function.name,
+                        content: JSON.stringify({ success: true, message: "OK. Reserva cancelada en la base de datos de manera exitosa. Agradece al cliente." })
                     });
                 }
             }
