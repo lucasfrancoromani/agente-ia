@@ -3,6 +3,7 @@ node_modules/
 
 # Variables de entorno (Secretos)
 .env
+google-credentials.json
 
 # Archivos temporales y de sesión de Whatsapp Web JS
 .wwebjs_auth/

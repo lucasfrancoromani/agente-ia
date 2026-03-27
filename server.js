@@ -62,10 +62,17 @@ const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 // Configuración de Google Calendar API
 const SCOPES = ['https://www.googleapis.com/auth/calendar.events'];
-const auth = new google.auth.GoogleAuth({
-    keyFile: path.join(__dirname, 'google-credentials.json'),
-    scopes: SCOPES,
-});
+
+let authParams = { scopes: SCOPES };
+if (process.env.GOOGLE_CREDENTIALS) {
+    // En Railway: leer desde la variable de entorno
+    authParams.credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS);
+} else {
+    // En local: leer desde el archivo físico
+    authParams.keyFile = path.join(__dirname, 'google-credentials.json');
+}
+
+const auth = new google.auth.GoogleAuth(authParams);
 const calendar = google.calendar({ version: 'v3', auth });
 const CALENDAR_ID = '88661e532c40f9634b3f7f8dd3b4eefeb56cc5a7532dbf86a8e254f7b41eee02@group.calendar.google.com';
 
