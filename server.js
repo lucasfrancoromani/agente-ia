@@ -3,6 +3,7 @@ const { Client, LocalAuth, Location } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const OpenAI = require('openai');
 const { google } = require('googleapis');
+const { createClient } = require('@supabase/supabase-js');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -59,6 +60,11 @@ Tu tono es amable pero blindado y seguro. No dudas. Guías la conversación.`;
 
 // Inicializar cliente de OpenAI
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+
+// Configuración de Supabase
+const supabaseUrl = process.env.SUPABASE_URL || '';
+const supabaseKey = process.env.SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Configuración de Google Calendar API
 const SCOPES = ['https://www.googleapis.com/auth/calendar.events'];
@@ -273,17 +279,16 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
                 type: "function",
                 function: {
                     name: "guardar_reserva",
-                    description: "Se llama a esta función ÚNICAMENTE cuando tienes TODOS los 4 datos obligatorios validados y el usuario acaba de aceptar la reserva. DEBES invocar esta función obligatoriamente. Para 'hora_fin', cálculalo internamente sumando 2 horas a la 'hora' solicitada.",
+                    description: "Se llama a esta función ÚNICAMENTE cuando tienes TODOS los 4 datos obligatorios validados y el usuario acaba de aceptar la reserva. DEBES invocar esta función obligatoriamente para registrarla.",
                     parameters: {
                         type: "object",
                         properties: {
                             nombre: { type: "string", description: "Nombre principal de quien reserva." },
                             fecha: { type: "string", description: "La fecha exacta de la reserva en formato 'YYYY-MM-DD', ej. '2026-03-27'." },
                             hora: { type: "string", description: "Hora de inicio de la reserva, en formato 'HH:mm', ej. '21:30'." },
-                            hora_fin: { type: "string", description: "Hora en que terminará la ocupación de la mesa (siempre suma exactamente 2 horas a la hora de inicio), ej. '23:30'." },
                             personas: { type: "number", description: "Cantidad total de comensales." }
                         },
-                        required: ["nombre", "fecha", "hora", "hora_fin", "personas"]
+                        required: ["nombre", "fecha", "hora", "personas"]
                     }
                 }
             }
@@ -306,9 +311,94 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
             for (const toolCall of responseMessage.tool_calls) {
                 if (toolCall.function.name === "guardar_reserva") {
                     const args = JSON.parse(toolCall.function.arguments);
-                    console.log(`💾 GUARDANDO RESERVA EN JSON y CALENDAR:`, args);
+                    console.log(`🧠 EVALUANDO DISPONIBILIDAD PARA:`, args);
 
-                    // --- 1. Guardar en Google Calendar ---
+                    // --- CALCULO INTERNO DE LA HORA FIN PARA EVITAR "LA HORA 25" ---
+                    const [h, m] = args.hora.split(':');
+                    let endH = parseInt(h, 10) + 2;
+                    
+                    let hora_fin_db = `${String(endH).padStart(2, '0')}:${m}`;
+                    let hora_fin_cal = hora_fin_db;
+                    let fecha_fin_cal = args.fecha;
+
+                    if (endH >= 24) {
+                        hora_fin_db = "23:59"; // Truco para que el SQL no cruce días erróneamente en el overlapping
+                        const d = new Date(`${args.fecha}T00:00:00Z`);
+                        d.setDate(d.getDate() + 1);
+                        fecha_fin_cal = d.toISOString().split('T')[0];
+                        hora_fin_cal = `${String(endH - 24).padStart(2, '0')}:${m}`;
+                    }
+
+                    // --- 0. Validación Matemática de Mesas con Supabase ---
+                    try {
+                        const { data: config } = await supabase.from('configuracion').select('*').single();
+                        
+                        // Traer todas las reservas del día que se SOLAPAN con el pedido
+                        // Una reserva se solapa si su inicio es ANTES del nuevo fin, y su fin es DESPUÉS del nuevo inicio
+                        const { data: superpuestas } = await supabase
+                            .from('reservas')
+                            .select('personas')
+                            .eq('fecha', args.fecha)
+                            .lt('hora_inicio', hora_fin_db + ':00')
+                            .gt('hora_fin', args.hora + ':00');
+
+                        let mesas2Libres = config.mesas_de_2;
+                        let mesas4Libres = config.mesas_de_4;
+
+                        // Descartar mesas ya ocupadas
+                        if (superpuestas) {
+                            for (let r of superpuestas) {
+                                let p = r.personas;
+                                while (p > 2 && mesas4Libres > 0) { mesas4Libres--; p -= 4; }
+                                while (p > 0 && mesas2Libres > 0) { mesas2Libres--; p -= 2; }
+                                while (p > 0 && mesas4Libres > 0) { mesas4Libres--; p -= 4; }
+                            }
+                        }
+
+                        // Ver si el nuevo grupo cabe
+                        let pNuevos = args.personas;
+                        while (pNuevos > 2 && mesas4Libres > 0) { mesas4Libres--; pNuevos -= 4; }
+                        while (pNuevos > 0 && mesas2Libres > 0) { mesas2Libres--; pNuevos -= 2; }
+                        while (pNuevos > 0 && mesas4Libres > 0) { mesas4Libres--; pNuevos -= 4; }
+
+                        if (pNuevos > 0) {
+                            // NO CUBRE LA CAPACIDAD! Rechazar reserva en el Function Calling
+                            console.log('⛔ SIN MESAS LIBRES. Ordenando a la IA que sugiera otro horario.');
+                            history.push(responseMessage);
+                            history.push({
+                                role: "tool",
+                                tool_call_id: toolCall.id,
+                                name: toolCall.function.name,
+                                content: JSON.stringify({ 
+                                    success: false, 
+                                    message: "ERROR: No hay capacidad física ni mesas suficientes en el local para esa cantidad de personas en ese rango horario. Sugiere un horario radicalmente diferente (antes o después)."
+                                })
+                            });
+                            continue; // Interrumpe este ciclo de herramientas, isConfirmed sigue en false
+                        }
+                        
+                    } catch (dbErr) {
+                        console.error('Error verificando disponibilidad en DB. Dejando pasar reserva por seguridad:', dbErr);
+                    }
+
+                    console.log(`💾 HAY LUGAR! GUARDANDO RESERVA:`, args);
+
+                    // --- 1. Guardar en Supabase ---
+                    try {
+                        await supabase.from('reservas').insert([{
+                            nombre: args.nombre,
+                            fecha: args.fecha,
+                            hora_inicio: args.hora + ':00',
+                            hora_fin: hora_fin_db + ':00',
+                            personas: args.personas,
+                            telefono: phoneNumber
+                        }]);
+                        console.log('✅ Reserva persistida en Supabase Dashboard.');
+                    } catch (e) {
+                         console.error('Error insertando en Supabase:', e);
+                    }
+
+                    // --- 2. Guardar en Google Calendar ---
                     // Usamos la variable phoneNumber que ya extrajo el número real del contacto
                     const event = {
                         summary: `Reserva: ${args.nombre} - ${args.personas} pax`,
@@ -318,7 +408,7 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
                             timeZone: 'Europe/Madrid',
                         },
                         end: {
-                            dateTime: `${args.fecha}T${args.hora_fin}:00`,
+                            dateTime: `${fecha_fin_cal}T${hora_fin_cal}:00`,
                             timeZone: 'Europe/Madrid',
                         },
                     };
@@ -333,7 +423,7 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
                         console.error('❌ Error guardando en Google Calendar:', calError);
                     }
 
-                    // --- 2. Guardar en reservas.json (Local Backup) ---
+                    // --- 3. Guardar en reservas.json (Local Backup Legacy) ---
                     const filePath = path.join(__dirname, 'reservas.json');
                     let reservasBase = [];
                     if (fs.existsSync(filePath)) {
