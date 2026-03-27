@@ -10,3 +10,7 @@ node_modules/
 
 # Otros archivos basura del sistema
 .DS_Store
+
+# Archivos de imagen qr
+generar-qr.js
+qr-flyer-alta-calidad.png

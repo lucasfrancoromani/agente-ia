@@ -1,0 +1,61 @@
+[
+  {
+    "nombre": "Lucas",
+    "fecha": "Domingo 27 de Marzo",
+    "hora": "20:00",
+    "personas": 2,
+    "telefono": "215938859311135lid",
+    "fechaCreacion": "2026-03-27T15:15:20.303Z"
+  },
+  {
+    "nombre": "Miguel",
+    "fecha": "Viernes 27 de Marzo",
+    "hora": "20:00",
+    "personas": 2,
+    "telefono": "215938859311135lid",
+    "fechaCreacion": "2026-03-27T15:26:10.111Z"
+  },
+  {
+    "nombre": "Laura",
+    "fecha": "Lunes 28 de Marzo",
+    "hora": "13:00",
+    "personas": 4,
+    "telefono": "215938859311135lid",
+    "fechaCreacion": "2026-03-27T15:31:06.574Z"
+  },
+  {
+    "nombre": "Nef",
+    "fecha": "Viernes 1 de Abril",
+    "hora": "20:00",
+    "personas": 8,
+    "telefono": "215938859311135lid",
+    "fechaCreacion": "2026-03-27T15:38:02.304Z"
+  },
+  {
+    "nombre": "Franco",
+    "fecha": "2026-03-28",
+    "hora": "20:00",
+    "hora_fin": "22:00",
+    "personas": 3,
+    "telefono": "215938859311135lid",
+    "fechaCreacion": "2026-03-27T16:12:35.202Z"
+  },
+  {
+    "nombre": "Lucas",
+    "fecha": "2026-03-27",
+    "hora": "21:00",
+    "hora_fin": "23:00",
+    "personas": 5,
+    "telefono": "34624939255",
+    "fechaCreacion": "2026-03-27T16:26:52.667Z"
+  },
+  {
+    "nombre": "Laura",
+    "fecha": "2026-03-29",
+    "hora": "13:00",
+    "hora_fin": "15:00",
+    "personas": 2,
+    "telefono": "34624939255",
+    "fechaCreacion": "2026-03-27T16:35:21.717Z"
+  }
+]
