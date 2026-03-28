@@ -29,7 +29,7 @@ Tu objetivo es tomar 4 DATOS OBLIGATORIOS para generar una reserva: Día, Hora, 
 
 Reglas de comportamiento y variables:
 
-1. Disponibilidad: Aceptas reservas desde las 13:00 hasta las 15:30, y desde las 20:00 hasta las 23:00. Las 13:00 y las 20:00 exactas son horarios 100% válidos. Si piden un horario que esté totalmente fuera, ofréceles amablemente uno cercano.
+1. Disponibilidad: Aceptas reservas de 13:00 a 15:30, y de 20:00 a 23:00. Cada reserva dura 2 HORAS EXACTAS. ANTES de pedir el nombre o confirmar mágicamente que hay lugar, DEBES obligatoriamente ejecutar la herramienta 'consultar_disponibilidad'. Si te dice que no hay mesas, recuerda que esas mesas seguirán ocupadas por 2 horas más. Por ende, si a las 20:00 está lleno, NO ofrezcas 20:30 o 21:00, tu obligación es ofrecer saltos matemáticos de 2 horas (ej. 22:00) u otro turno/día.
 2. Fechas exactas: Tienes acceso a la fecha de hoy. Al interactuar sobre días relativos ("mañana", "el jueves") calcula internamente la fecha exacta. 
 3. Menú y Comida: Si preguntan por el menú, responde con alegría que tienen excelentes arroces y pescados. Nunca inventes platos. Si insisten sobre opciones concretas (veganas, infantil, carnes), confirma que hay alternativas adaptadas que el camarero les comentará gustoso, y vuelve rápidamente a la reserva.
 4. Cancelaciones: Si el usuario desea cancelar una reserva previamente pactada, DEBES ejecutar la herramienta 'cancelar_reserva' obligatoriamente para liberar la mesa. Agradeceles por avisar.
@@ -258,6 +258,68 @@ client.on('message_create', async (message) => {
         console.error('Error fatal al procesar el mensaje:', error);
     }
 });
+// --- FUNCIÓN GLOBAL DE TETRIS ---
+async function verificarEspacioFisico(fecha, hora, personas) {
+    const [h, m] = hora.split(':');
+    let endH = parseInt(h, 10) + 2;
+    let hora_fin_db = `${String(endH).padStart(2, '0')}:${m}`;
+
+    if (endH >= 24) { hora_fin_db = "23:59"; }
+
+    try {
+        const { data: config } = await supabase.from('configuracion').select('inventario').single();
+        const { data: superpuestas } = await supabase
+            .from('reservas')
+            .select('personas')
+            .eq('estado', 'confirmada')
+            .eq('fecha', fecha)
+            .lt('hora_inicio', hora_fin_db + ':00')
+            .gt('hora_fin', hora + ':00');
+
+        let mesasLibres = {};
+        if (config && config.inventario) {
+            config.inventario.forEach(m => {
+                mesasLibres[m.capacidad] = (mesasLibres[m.capacidad] || 0) + m.cantidad;
+            });
+        }
+
+        let personasRestantes = personas;
+        
+        // Descuenta reservas existentes
+        if (superpuestas) {
+            for (let r of superpuestas) {
+                let pRes = r.personas;
+                while (pRes > 0) {
+                    let opciones = Object.keys(mesasLibres).map(Number).filter(size => mesasLibres[size] > 0).sort((a, b) => a - b);
+                    if (opciones.length === 0) break;
+                    let perf = opciones.find(size => size >= pRes);
+                    if (perf) { mesasLibres[perf]--; pRes = 0; } 
+                    else {
+                        let max = opciones[opciones.length - 1];
+                        mesasLibres[max]--; pRes -= max; 
+                    }
+                }
+            }
+        }
+
+        // Intenta meter al nuevo grupo
+        while (personasRestantes > 0) {
+            let opciones = Object.keys(mesasLibres).map(Number).filter(size => mesasLibres[size] > 0).sort((a, b) => a - b);
+            if (opciones.length === 0) return false;
+
+            let perf = opciones.find(size => size >= personasRestantes);
+            if (perf) { mesasLibres[perf]--; personasRestantes = 0; } 
+            else {
+                let max = opciones[opciones.length - 1];
+                mesasLibres[max]--; personasRestantes -= max; 
+            }
+        }
+        return true;
+    } catch(err) {
+        console.error("Error verificando disponibilidad global:", err);
+        return false;
+    }
+}
 
 async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
     try {
@@ -289,6 +351,22 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
                             personas: { type: "number", description: "Cantidad total de comensales." }
                         },
                         required: ["nombre", "fecha", "hora", "personas"]
+                    }
+                }
+            },
+            {
+                type: "function",
+                function: {
+                    name: "consultar_disponibilidad",
+                    description: "Simula el tamaño físico del salón para verificar si la cantidad de personas cabe en el horario exacto solicitado antes de que le confirmes ilusamente al usuario.",
+                    parameters: {
+                        type: "object",
+                        properties: {
+                            fecha: { type: "string", description: "Fecha de la reserva 'YYYY-MM-DD'" },
+                            hora: { type: "string", description: "Hora de la reserva 'HH:mm'" },
+                            personas: { type: "number", description: "Cantidad de comensales" }
+                        },
+                        required: ["fecha", "hora", "personas"]
                     }
                 }
             },
@@ -343,82 +421,18 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
                         hora_fin_cal = `${String(endH - 24).padStart(2, '0')}:${m}`;
                     }
 
-                        // --- 0. Validación Matemática de Mesas Dinámica (ALGORITMO GREEDY TETRIS) ---
-                    try {
-                        const { data: config } = await supabase.from('configuracion').select('inventario').single();
-                        
-                        // Traer todas las reservas del día que se SOLAPAN con el pedido
-                        const { data: superpuestas } = await supabase
-                            .from('reservas')
-                            .select('personas')
-                            .eq('estado', 'confirmada')
-                            .eq('fecha', args.fecha)
-                            .lt('hora_inicio', hora_fin_db + ':00')
-                            .gt('hora_fin', args.hora + ':00');
+                    let entraEnElLocal = await verificarEspacioFisico(args.fecha, args.hora, args.personas);
 
-                        // Mapear el inventario de la DB {"capacidad": 2, "cantidad": 5}
-                        let mesasLibres = {};
-                        if (config && config.inventario) {
-                            config.inventario.forEach(m => {
-                                mesasLibres[m.capacidad] = (mesasLibres[m.capacidad] || 0) + m.cantidad;
-                            });
-                        }
-
-                        // Algoritmo Goloso para sentar a un grupo
-                        function sentarGrupoMatematico(cantidadPersonas, mapaMesas) {
-                            let personasRestantes = cantidadPersonas;
-                            while (personasRestantes > 0) {
-                                let opcionesDisponibles = Object.keys(mapaMesas)
-                                    .map(Number)
-                                    .filter(size => mapaMesas[size] > 0)
-                                    .sort((a, b) => a - b); // Ascendente
-                                
-                                if (opcionesDisponibles.length === 0) return false; // El local explotó, sin sillas.
-
-                                // 1. Buscar la mesa más chiquita que los cubra a todos de un tirón (Ej: son 5 y hay mesa de 6 o de 8)
-                                let mesaPerfecta = opcionesDisponibles.find(size => size >= personasRestantes);
-                                
-                                if (mesaPerfecta) {
-                                    mapaMesas[mesaPerfecta]--;
-                                    personasRestantes = 0; // Sentados!
-                                } else {
-                                    // 2. Si son tantos que no entran en ninguna mesa individual, les damos LA MESA MÁS GRANDE que tengamos (para juntar mesas)
-                                    let mesaMasGrande = opcionesDisponibles[opcionesDisponibles.length - 1];
-                                    mapaMesas[mesaMasGrande]--;
-                                    personasRestantes -= mesaMasGrande; 
-                                }
-                            }
-                            return true;
-                        }
-
-                        // Descontar la gente que ya está sentada (reservas previas del mismo horario)
-                        if (superpuestas) {
-                            for (let r of superpuestas) {
-                                sentarGrupoMatematico(r.personas, mesasLibres);
-                            }
-                        }
-
-                        // Intentar sentar a los NUEVOS amigos que están pidiendo turno ahora
-                        let entraEnElLocal = sentarGrupoMatematico(args.personas, mesasLibres);
-
-                        if (!entraEnElLocal) {
-                            // NO CUBRE LA CAPACIDAD! Rechazar reserva en el Function Calling
-                            console.log('⛔ SIN MESAS LIBRES. Ordenando a la IA que sugiera otro horario.');
-                            history.push(responseMessage);
-                            history.push({
-                                role: "tool",
-                                tool_call_id: toolCall.id,
-                                name: toolCall.function.name,
-                                content: JSON.stringify({ 
-                                    success: false, 
-                                    message: "ERROR: No hay capacidad física ni mesas suficientes en el local para esa cantidad de personas en ese rango horario. Sugiere un horario radicalmente diferente (antes o después)."
-                                })
-                            });
-                            continue; // Interrumpe este ciclo de herramientas, isConfirmed sigue en false
-                        }
-                        
-                    } catch (dbErr) {
-                        console.error('Error verificando disponibilidad en DB. Dejando pasar reserva por seguridad:', dbErr);
+                    if (!entraEnElLocal) {
+                        console.log('⛔ SIN MESAS LIBRES. Rechazada de último minuto en guardar_reserva.');
+                        history.push(responseMessage);
+                        history.push({
+                            role: "tool",
+                            tool_call_id: toolCall.id,
+                            name: toolCall.function.name,
+                            content: JSON.stringify({ success: false, message: "ERROR: Capacidad física del local agotada para esa cantidad de comensales en ese horario. Discúlpate y sugiere un horario distinto."})
+                        });
+                        continue;
                     }
 
                     console.log(`💾 HAY LUGAR! GUARDANDO RESERVA:`, args);
@@ -507,6 +521,23 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
                         tool_call_id: toolCall.id,
                         name: toolCall.function.name,
                         content: JSON.stringify({ success: true, message: "OK. Reserva cancelada en la base de datos de manera exitosa. Agradece al cliente." })
+                    });
+                } else if (toolCall.function.name === "consultar_disponibilidad") {
+                    console.log(`🔍 SIMULADOR DE TETRIS INVOCADO POR LA IA`);
+                    const args = JSON.parse(toolCall.function.arguments);
+                    let hayLugar = await verificarEspacioFisico(args.fecha, args.hora, args.personas);
+                    console.log(`Resultado de simulador para ${args.personas} pax a las ${args.hora}: `, hayLugar ? "HAY ESPACIO" : "LLENO");
+                    
+                    history.push(responseMessage);
+                    history.push({
+                        role: "tool",
+                        tool_call_id: toolCall.id,
+                        name: toolCall.function.name,
+                        content: JSON.stringify({ 
+                            success: true, 
+                            tieneEspacioElRestaurante: hayLugar, 
+                            instruccionSecreta: hayLugar ? "SI HAY LUGAR, puedes decirle amablemente al usuario que sí, pero pídele el nombre enseguida para finalizar la confirmación." : "NO HAY LUGAR. REGLA ESTRICTA: Las reservas duran 2 horas. Dile que está lleno en ese horario y ofrécele EXCLUSIVAMENTE saltos de +2 horas o -2 horas (Ej: Si pidió 20:00, ofrécele 22:00 u otro turno, PERO NUNCA le ofrezcas 20:30 o 21:00 porque la mesa sigue ocupada)."
+                        })
                     });
                 }
             }

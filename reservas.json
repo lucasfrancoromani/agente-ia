@@ -57,5 +57,21 @@
     "personas": 2,
     "telefono": "34624939255",
     "fechaCreacion": "2026-03-27T16:35:21.717Z"
+  },
+  {
+    "nombre": "Lucas",
+    "fecha": "2026-03-28",
+    "hora": "20:00",
+    "personas": 8,
+    "telefono": "34624939255",
+    "fechaCreacion": "2026-03-28T13:00:22.268Z"
+  },
+  {
+    "nombre": "Franco",
+    "fecha": "2026-03-28",
+    "hora": "22:00",
+    "personas": 8,
+    "telefono": "5492612441296",
+    "fechaCreacion": "2026-03-28T13:14:12.305Z"
   }
 ]
