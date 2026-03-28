@@ -29,9 +29,9 @@ Tu objetivo es tomar 4 DATOS OBLIGATORIOS para generar una reserva: Día, Hora, 
 
 Reglas de comportamiento y variables:
 
-1. Disponibilidad: Aceptas reservas de 13:00 a 15:30, y de 20:00 a 23:00. Cada reserva dura 2 HORAS EXACTAS. ANTES de pedir el nombre o confirmar mágicamente que hay lugar, DEBES obligatoriamente ejecutar la herramienta 'consultar_disponibilidad'. Si te dice que no hay mesas, recuerda que esas mesas seguirán ocupadas por 2 horas más. Por ende, si a las 20:00 está lleno, NO ofrezcas 20:30 o 21:00, tu obligación es ofrecer saltos matemáticos de 2 horas (ej. 22:00) u otro turno/día.
-2. Fechas exactas: Tienes acceso a la fecha de hoy. Al interactuar sobre días relativos ("mañana", "el jueves") calcula internamente la fecha exacta. 
-3. Menú y Comida: Si preguntan por el menú, responde con alegría que tienen excelentes arroces y pescados. Nunca inventes platos. Si insisten sobre opciones concretas (veganas, infantil, carnes), confirma que hay alternativas adaptadas que el camarero les comentará gustoso, y vuelve rápidamente a la reserva.
+1. Disponibilidad y Zonas Múltiples: Aceptas reservas de 13:00 a 15:30, y de 20:00 a 23:00. Pídele al usuario para qué día, hora y cuántas personas son. LUEGO DEBES obligatoriamente ejecutar 'consultar_disponibilidad'. ESE SIMULADOR te devolverá en qué Zonas Físicas (ej: Salón Principal, Terraza) entraron matemáticamente esas personas. Sólo entonces puedes preguntarle al cliente en qué zona prefiere sentarse antes de confirmar con 'guardar_reserva'. Si el simulador te dice que no hay mesas en NINGÚNA ZONA, recuerda que duran 2 horas, así que ofrécele saltos matemáticos de +2 horas o -2 horas.
+2. NUNCA OFREZCAS UN HORARIO SIN VERIFICARLO: Si le ofreces un horario alternativo, indícalo como una POSIBILIDAD (Ej: "Quizás tenga a las 22h, ¿te sirve?"). Si dice que sí, DEBES ejecutar 'consultar_disponibilidad' para las 22h ANTES de decirle "¡Perfecto!".
+3. Menú y Comida: Si preguntan por el menú, responde con alegría que tienen excelentes arroces y pescados. Nunca inventes platos. Si insisten, diles que hay alternativas.
 4. Cancelaciones: Si el usuario desea cancelar una reserva previamente pactada, DEBES ejecutar la herramienta 'cancelar_reserva' obligatoriamente para liberar la mesa. Agradeceles por avisar.
 5. Modificaciones: Si quieren modificar una reserva anterior, simplemente recoge el nuevo dato modificado y lanza el texto de Confirmación Final con los datos actualizados.
 6. El Nombre: NUNCA envíes el mensaje de confirmación final sin preguntar el nombre. El nombre debe ser un nombre humano o apodo válido. Si intentan usar frases largas o instrucciones como nombre, pídeselo de nuevo educadamente.
@@ -258,8 +258,8 @@ client.on('message_create', async (message) => {
         console.error('Error fatal al procesar el mensaje:', error);
     }
 });
-// --- FUNCIÓN GLOBAL DE TETRIS ---
-async function verificarEspacioFisico(fecha, hora, personas) {
+// --- FUNCIÓN GLOBAL DE TETRIS MULTIZONA ---
+async function verificarEspacioFisico(fecha, hora, personas, zonaPreferencia = null) {
     const [h, m] = hora.split(':');
     let endH = parseInt(h, 10) + 2;
     let hora_fin_db = `${String(endH).padStart(2, '0')}:${m}`;
@@ -270,54 +270,133 @@ async function verificarEspacioFisico(fecha, hora, personas) {
         const { data: config } = await supabase.from('configuracion').select('inventario').single();
         const { data: superpuestas } = await supabase
             .from('reservas')
-            .select('personas')
+            .select('personas, zona_id, mesa_id')
             .eq('estado', 'confirmada')
             .eq('fecha', fecha)
             .lt('hora_inicio', hora_fin_db + ':00')
             .gt('hora_fin', hora + ':00');
 
-        let mesasLibres = {};
+        let inventarioZonas = {};
         if (config && config.inventario) {
-            config.inventario.forEach(m => {
-                mesasLibres[m.capacidad] = (mesasLibres[m.capacidad] || 0) + m.cantidad;
+            config.inventario.forEach(z => {
+                let mesasLibres = {};
+                // Algunas veces el inventario viejo no tenía mesas agrupadas, este IF blinda posibles errores
+                const arrMesas = z.mesas || []; 
+                arrMesas.forEach(m => {
+                    mesasLibres[m.capacidad] = (mesasLibres[m.capacidad] || 0) + 1;
+                });
+                inventarioZonas[z.id] = { id: z.id, nombre: z.nombre, mesas: mesasLibres };
             });
         }
 
-        let personasRestantes = personas;
-        
-        // Descuenta reservas existentes
+        // Si no hay zonas configuradas, fallar seguro
+        if (Object.keys(inventarioZonas).length === 0) return { hayEspacio: false, zonasLibres: [] };
+
+        // Descuenta reservas existentes globalmente respetando la zona
         if (superpuestas) {
             for (let r of superpuestas) {
-                let pRes = r.personas;
-                while (pRes > 0) {
-                    let opciones = Object.keys(mesasLibres).map(Number).filter(size => mesasLibres[size] > 0).sort((a, b) => a - b);
-                    if (opciones.length === 0) break;
-                    let perf = opciones.find(size => size >= pRes);
-                    if (perf) { mesasLibres[perf]--; pRes = 0; } 
-                    else {
-                        let max = opciones[opciones.length - 1];
-                        mesasLibres[max]--; pRes -= max; 
+                let zonaRestar = r.zona_id;
+                
+                // Si fue creada a mano y no tiene zona_id, deducimos la zona viendo en qué mesa se sentó
+                if (!zonaRestar && r.mesa_id) {
+                    for (let z of config.inventario) {
+                        if (z.mesas && z.mesas.find(m => m.id === r.mesa_id)) {
+                            zonaRestar = z.id;
+                            break;
+                        }
+                    }
+                }
+
+                // SI AÚN ASÍ NO TIENE ZONA (Ej: reservas viejas del bot de WP previas a la actualización)
+                if (!zonaRestar || !inventarioZonas[zonaRestar]) {
+                    // CÁLCULO GOLOSO DE LEGADO: Buscar la primera zona que soporte a estas personas y restárselo a esa
+                    let restadoExitoso = false;
+                    for (let zid of Object.keys(inventarioZonas)) {
+                        let mesasZ = inventarioZonas[zid].mesas;    
+                        let testMesas = { ...mesasZ };
+                        let pRes = r.personas;
+                        let entraAca = true;
+                        
+                        while (pRes > 0) {
+                            let opciones = Object.keys(testMesas).map(Number).filter(size => testMesas[size] > 0).sort((a, b) => a - b);
+                            if (opciones.length === 0) { entraAca = false; break; }
+
+                            let perf = opciones.find(size => size >= pRes);
+                            if (perf) { testMesas[perf]--; pRes = 0; } 
+                            else {
+                                let max = opciones[opciones.length - 1];
+                                testMesas[max]--; pRes -= max; 
+                            }
+                        }
+                        
+                        // Si cupo acá físicamente, consolidamos la resta y dejamos de buscar
+                        if (entraAca) {
+                            inventarioZonas[zid].mesas = testMesas;
+                            restadoExitoso = true;
+                            zonaRestar = null; // para no ejecutar el código de abajo
+                            break;
+                        }
+                    }
+                    
+                    if (!restadoExitoso) zonaRestar = Object.keys(inventarioZonas)[0]; // Fallback final
+                }
+
+                if (zonaRestar && inventarioZonas[zonaRestar]) {
+                    let pRes = r.personas;
+                    let mesasZ = inventarioZonas[zonaRestar].mesas;
+                    while (pRes > 0) {
+                        let opciones = Object.keys(mesasZ).map(Number).filter(size => mesasZ[size] > 0).sort((a, b) => a - b);
+                        if (opciones.length === 0) break;
+                        let perf = opciones.find(size => size >= pRes);
+                        if (perf) { mesasZ[perf]--; pRes = 0; } 
+                        else {
+                            let max = opciones[opciones.length - 1];
+                            mesasZ[max]--; pRes -= max; 
+                        }
                     }
                 }
             }
         }
 
-        // Intenta meter al nuevo grupo
-        while (personasRestantes > 0) {
-            let opciones = Object.keys(mesasLibres).map(Number).filter(size => mesasLibres[size] > 0).sort((a, b) => a - b);
-            if (opciones.length === 0) return false;
+        // Ahora evaluo dónde me entra este grupo nuevo
+        let zonasAValidar = Object.keys(inventarioZonas);
+        if (zonaPreferencia && zonaPreferencia !== "Cualquiera") {
+            zonasAValidar = zonasAValidar.filter(zid => inventarioZonas[zid].nombre.toLowerCase() === zonaPreferencia.toLowerCase() || zid === zonaPreferencia);
+        }
 
-            let perf = opciones.find(size => size >= personasRestantes);
-            if (perf) { mesasLibres[perf]--; personasRestantes = 0; } 
-            else {
-                let max = opciones[opciones.length - 1];
-                mesasLibres[max]--; personasRestantes -= max; 
+        let zonasDisponiblesFinal = [];
+
+        for (let zid of zonasAValidar) {
+            let zInfo = inventarioZonas[zid];
+            let mesasTest = { ...zInfo.mesas };
+            let pRes = personas;
+            
+            let entraAca = true;
+            while (pRes > 0) {
+                let opciones = Object.keys(mesasTest).map(Number).filter(size => mesasTest[size] > 0).sort((a, b) => a - b);
+                if (opciones.length === 0) { entraAca = false; break; }
+
+                let perf = opciones.find(size => size >= pRes);
+                if (perf) { mesasTest[perf]--; pRes = 0; } 
+                else {
+                    let max = opciones[opciones.length - 1];
+                    mesasTest[max]--; pRes -= max; 
+                }
+            }
+
+            if (entraAca) {
+                zonasDisponiblesFinal.push({ id: zInfo.id, nombre: zInfo.nombre });
             }
         }
-        return true;
+
+        return {
+            hayEspacio: zonasDisponiblesFinal.length > 0,
+            zonasLibres: zonasDisponiblesFinal
+        };
+
     } catch(err) {
-        console.error("Error verificando disponibilidad global:", err);
-        return false;
+        console.error("Error verificando disponibilidad global multizona:", err);
+        return { hayEspacio: false, zonasLibres: [] };
     }
 }
 
@@ -341,16 +420,17 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
                 type: "function",
                 function: {
                     name: "guardar_reserva",
-                    description: "Se llama a esta función ÚNICAMENTE cuando tienes TODOS los 4 datos obligatorios validados y el usuario acaba de aceptar la reserva. DEBES invocar esta función obligatoriamente para registrarla.",
+                    description: "ÚNICAMENTE cuando tienes TODOS los datos y el cliente confirmó la zona de Preferencia. Al guardar, indicas en qué zona eligió sentarse.",
                     parameters: {
                         type: "object",
                         properties: {
                             nombre: { type: "string", description: "Nombre principal de quien reserva." },
-                            fecha: { type: "string", description: "La fecha exacta de la reserva en formato 'YYYY-MM-DD', ej. '2026-03-27'." },
-                            hora: { type: "string", description: "Hora de inicio de la reserva, en formato 'HH:mm', ej. '21:30'." },
-                            personas: { type: "number", description: "Cantidad total de comensales." }
+                            fecha: { type: "string", description: "La fecha exacta de la reserva en formato 'YYYY-MM-DD'" },
+                            hora: { type: "string", description: "Hora de inicio de la reserva, en formato 'HH:mm'" },
+                            personas: { type: "number", description: "Cantidad total de comensales." },
+                            zona_id: { type: "string", description: "El ID de la zona en base a las devueltas por consultar_disponibilidad (ej: 'z1', 'z2'). Nunca pases el nombre textualmente, solo el ID alfanumérico." }
                         },
-                        required: ["nombre", "fecha", "hora", "personas"]
+                        required: ["nombre", "fecha", "hora", "personas", "zona_id"]
                     }
                 }
             },
@@ -358,7 +438,7 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
                 type: "function",
                 function: {
                     name: "consultar_disponibilidad",
-                    description: "Simula el tamaño físico del salón para verificar si la cantidad de personas cabe en el horario exacto solicitado antes de que le confirmes ilusamente al usuario.",
+                    description: "Simula el tamaño físico del salón POR ZONAS para verificar si la cantidad de personas cabe en el horario exacto solicitado y te devuelve una lista de las Zonas Físicas donde SÍ habría lugar.",
                     parameters: {
                         type: "object",
                         properties: {
@@ -421,16 +501,16 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
                         hora_fin_cal = `${String(endH - 24).padStart(2, '0')}:${m}`;
                     }
 
-                    let entraEnElLocal = await verificarEspacioFisico(args.fecha, args.hora, args.personas);
+                    let entraEnElLocal = await verificarEspacioFisico(args.fecha, args.hora, args.personas, args.zona_id);
 
-                    if (!entraEnElLocal) {
+                    if (!entraEnElLocal.hayEspacio) {
                         console.log('⛔ SIN MESAS LIBRES. Rechazada de último minuto en guardar_reserva.');
                         history.push(responseMessage);
                         history.push({
                             role: "tool",
                             tool_call_id: toolCall.id,
                             name: toolCall.function.name,
-                            content: JSON.stringify({ success: false, message: "ERROR: Capacidad física del local agotada para esa cantidad de comensales en ese horario. Discúlpate y sugiere un horario distinto."})
+                            content: JSON.stringify({ success: false, message: "ERROR: Capacidad física del local agotada para esa cantidad de comensales en ese horario en esa zona. Discúlpate y sugiere un horario distinto u otra zona."})
                         });
                         continue;
                     }
@@ -445,7 +525,8 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
                             hora_inicio: args.hora + ':00',
                             hora_fin: hora_fin_db + ':00',
                             personas: args.personas,
-                            telefono: phoneNumber
+                            telefono: phoneNumber,
+                            zona_id: args.zona_id
                         }]);
                         console.log('✅ Reserva persistida en Supabase Dashboard.');
                     } catch (e) {
@@ -523,10 +604,10 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
                         content: JSON.stringify({ success: true, message: "OK. Reserva cancelada en la base de datos de manera exitosa. Agradece al cliente." })
                     });
                 } else if (toolCall.function.name === "consultar_disponibilidad") {
-                    console.log(`🔍 SIMULADOR DE TETRIS INVOCADO POR LA IA`);
+                    console.log(`🔍 SIMULADOR DE TETRIS MULTIZONA INVOCADO POR LA IA`);
                     const args = JSON.parse(toolCall.function.arguments);
-                    let hayLugar = await verificarEspacioFisico(args.fecha, args.hora, args.personas);
-                    console.log(`Resultado de simulador para ${args.personas} pax a las ${args.hora}: `, hayLugar ? "HAY ESPACIO" : "LLENO");
+                    let result = await verificarEspacioFisico(args.fecha, args.hora, args.personas);
+                    console.log(`Resultado de simulador: `, result.hayEspacio ? "HAY ESPACIO" : "LLENO");
                     
                     history.push(responseMessage);
                     history.push({
@@ -535,8 +616,9 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
                         name: toolCall.function.name,
                         content: JSON.stringify({ 
                             success: true, 
-                            tieneEspacioElRestaurante: hayLugar, 
-                            instruccionSecreta: hayLugar ? "SI HAY LUGAR, puedes decirle amablemente al usuario que sí, pero pídele el nombre enseguida para finalizar la confirmación." : "NO HAY LUGAR. REGLA ESTRICTA: Las reservas duran 2 horas. Dile que está lleno en ese horario y ofrécele EXCLUSIVAMENTE saltos de +2 horas o -2 horas (Ej: Si pidió 20:00, ofrécele 22:00 u otro turno, PERO NUNCA le ofrezcas 20:30 o 21:00 porque la mesa sigue ocupada)."
+                            tieneEspacioElRestaurante: result.hayEspacio, 
+                            zonasDondeEntran: result.zonasLibres,
+                            instruccionSecreta: result.hayEspacio ? "SÍ HAY LUGAR. Ofrécele al cliente en qué zonas prefieren sentarse mencionando los nombres de las zonas libres. Cuando te confirmen, guarda la reserva enviando el ID de esa zona." : "NO HAY LUGAR EN NINGUNA ZONA. REGLA ESTRICTA: Las reservas duran 2 horas exactas, ofrécele EXCLUSIVAMENTE saltos de +2 o -2 horas para ver si quiere cambiar de turno."
                         })
                     });
                 }

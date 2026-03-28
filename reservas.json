@@ -73,5 +73,23 @@
     "personas": 8,
     "telefono": "5492612441296",
     "fechaCreacion": "2026-03-28T13:14:12.305Z"
+  },
+  {
+    "nombre": "Carlos",
+    "fecha": "2026-03-28",
+    "hora": "20:00",
+    "personas": 4,
+    "zona_id": "z_1774708969732",
+    "telefono": "34624939255",
+    "fechaCreacion": "2026-03-28T15:52:28.383Z"
+  },
+  {
+    "nombre": "Fernando",
+    "fecha": "2026-03-28",
+    "hora": "20:00",
+    "personas": 2,
+    "zona_id": "z_principal",
+    "telefono": "5492612441296",
+    "fechaCreacion": "2026-03-28T16:10:39.875Z"
   }
 ]
