@@ -91,5 +91,23 @@
     "zona_id": "z_principal",
     "telefono": "5492612441296",
     "fechaCreacion": "2026-03-28T16:10:39.875Z"
+  },
+  {
+    "nombre": "Fernando",
+    "fecha": "2026-03-28",
+    "hora": "20:00",
+    "personas": 4,
+    "zona_id": "z_1774715045152",
+    "telefono": "5492612441296",
+    "fechaCreacion": "2026-03-28T16:25:40.781Z"
+  },
+  {
+    "nombre": "Lucas",
+    "fecha": "2026-03-28",
+    "hora": "21:00",
+    "personas": 8,
+    "zona_id": "z_1774715045152",
+    "telefono": "34624939255",
+    "fechaCreacion": "2026-03-28T16:28:11.497Z"
   }
 ]

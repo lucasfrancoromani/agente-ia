@@ -281,7 +281,7 @@ async function verificarEspacioFisico(fecha, hora, personas, zonaPreferencia = n
             config.inventario.forEach(z => {
                 let mesasLibres = {};
                 // Algunas veces el inventario viejo no tenía mesas agrupadas, este IF blinda posibles errores
-                const arrMesas = z.mesas || []; 
+                const arrMesas = z.mesas || [];
                 arrMesas.forEach(m => {
                     mesasLibres[m.capacidad] = (mesasLibres[m.capacidad] || 0) + 1;
                 });
@@ -296,7 +296,7 @@ async function verificarEspacioFisico(fecha, hora, personas, zonaPreferencia = n
         if (superpuestas) {
             for (let r of superpuestas) {
                 let zonaRestar = r.zona_id;
-                
+
                 // Si fue creada a mano y no tiene zona_id, deducimos la zona viendo en qué mesa se sentó
                 if (!zonaRestar && r.mesa_id) {
                     for (let z of config.inventario) {
@@ -312,23 +312,23 @@ async function verificarEspacioFisico(fecha, hora, personas, zonaPreferencia = n
                     // CÁLCULO GOLOSO DE LEGADO: Buscar la primera zona que soporte a estas personas y restárselo a esa
                     let restadoExitoso = false;
                     for (let zid of Object.keys(inventarioZonas)) {
-                        let mesasZ = inventarioZonas[zid].mesas;    
+                        let mesasZ = inventarioZonas[zid].mesas;
                         let testMesas = { ...mesasZ };
                         let pRes = r.personas;
                         let entraAca = true;
-                        
+
                         while (pRes > 0) {
                             let opciones = Object.keys(testMesas).map(Number).filter(size => testMesas[size] > 0).sort((a, b) => a - b);
                             if (opciones.length === 0) { entraAca = false; break; }
 
                             let perf = opciones.find(size => size >= pRes);
-                            if (perf) { testMesas[perf]--; pRes = 0; } 
+                            if (perf) { testMesas[perf]--; pRes = 0; }
                             else {
                                 let max = opciones[opciones.length - 1];
-                                testMesas[max]--; pRes -= max; 
+                                testMesas[max]--; pRes -= max;
                             }
                         }
-                        
+
                         // Si cupo acá físicamente, consolidamos la resta y dejamos de buscar
                         if (entraAca) {
                             inventarioZonas[zid].mesas = testMesas;
@@ -337,7 +337,7 @@ async function verificarEspacioFisico(fecha, hora, personas, zonaPreferencia = n
                             break;
                         }
                     }
-                    
+
                     if (!restadoExitoso) zonaRestar = Object.keys(inventarioZonas)[0]; // Fallback final
                 }
 
@@ -348,10 +348,10 @@ async function verificarEspacioFisico(fecha, hora, personas, zonaPreferencia = n
                         let opciones = Object.keys(mesasZ).map(Number).filter(size => mesasZ[size] > 0).sort((a, b) => a - b);
                         if (opciones.length === 0) break;
                         let perf = opciones.find(size => size >= pRes);
-                        if (perf) { mesasZ[perf]--; pRes = 0; } 
+                        if (perf) { mesasZ[perf]--; pRes = 0; }
                         else {
                             let max = opciones[opciones.length - 1];
-                            mesasZ[max]--; pRes -= max; 
+                            mesasZ[max]--; pRes -= max;
                         }
                     }
                 }
@@ -370,17 +370,17 @@ async function verificarEspacioFisico(fecha, hora, personas, zonaPreferencia = n
             let zInfo = inventarioZonas[zid];
             let mesasTest = { ...zInfo.mesas };
             let pRes = personas;
-            
+
             let entraAca = true;
             while (pRes > 0) {
                 let opciones = Object.keys(mesasTest).map(Number).filter(size => mesasTest[size] > 0).sort((a, b) => a - b);
                 if (opciones.length === 0) { entraAca = false; break; }
 
                 let perf = opciones.find(size => size >= pRes);
-                if (perf) { mesasTest[perf]--; pRes = 0; } 
+                if (perf) { mesasTest[perf]--; pRes = 0; }
                 else {
                     let max = opciones[opciones.length - 1];
-                    mesasTest[max]--; pRes -= max; 
+                    mesasTest[max]--; pRes -= max;
                 }
             }
 
@@ -394,7 +394,7 @@ async function verificarEspacioFisico(fecha, hora, personas, zonaPreferencia = n
             zonasLibres: zonasDisponiblesFinal
         };
 
-    } catch(err) {
+    } catch (err) {
         console.error("Error verificando disponibilidad global multizona:", err);
         return { hayEspacio: false, zonasLibres: [] };
     }
@@ -488,7 +488,7 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
                     // --- CALCULO INTERNO DE LA HORA FIN PARA EVITAR "LA HORA 25" ---
                     const [h, m] = args.hora.split(':');
                     let endH = parseInt(h, 10) + 2;
-                    
+
                     let hora_fin_db = `${String(endH).padStart(2, '0')}:${m}`;
                     let hora_fin_cal = hora_fin_db;
                     let fecha_fin_cal = args.fecha;
@@ -510,7 +510,7 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
                             role: "tool",
                             tool_call_id: toolCall.id,
                             name: toolCall.function.name,
-                            content: JSON.stringify({ success: false, message: "ERROR: Capacidad física del local agotada para esa cantidad de comensales en ese horario en esa zona. Discúlpate y sugiere un horario distinto u otra zona."})
+                            content: JSON.stringify({ success: false, message: "ERROR: Capacidad física del local agotada para esa cantidad de comensales en ese horario en esa zona. Discúlpate y sugiere un horario distinto u otra zona." })
                         });
                         continue;
                     }
@@ -526,11 +526,12 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
                             hora_fin: hora_fin_db + ':00',
                             personas: args.personas,
                             telefono: phoneNumber,
-                            zona_id: args.zona_id
+                            zona_id: args.zona_id,
+                            estado: 'confirmada'
                         }]);
                         console.log('✅ Reserva persistida en Supabase Dashboard.');
                     } catch (e) {
-                         console.error('Error insertando en Supabase:', e);
+                        console.error('Error insertando en Supabase:', e);
                     }
 
                     // --- 2. Guardar en Google Calendar ---
@@ -590,9 +591,9 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
                             .update({ estado: 'cancelada' })
                             .eq('telefono', phoneNumber)
                             .eq('estado', 'confirmada');
-                        
+
                         console.log("Estado de cancelación en Supabase actualizado.");
-                    } catch(err) {
+                    } catch (err) {
                         console.error("Error al cancelar:", err);
                     }
 
@@ -608,15 +609,15 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
                     const args = JSON.parse(toolCall.function.arguments);
                     let result = await verificarEspacioFisico(args.fecha, args.hora, args.personas);
                     console.log(`Resultado de simulador: `, result.hayEspacio ? "HAY ESPACIO" : "LLENO");
-                    
+
                     history.push(responseMessage);
                     history.push({
                         role: "tool",
                         tool_call_id: toolCall.id,
                         name: toolCall.function.name,
-                        content: JSON.stringify({ 
-                            success: true, 
-                            tieneEspacioElRestaurante: result.hayEspacio, 
+                        content: JSON.stringify({
+                            success: true,
+                            tieneEspacioElRestaurante: result.hayEspacio,
                             zonasDondeEntran: result.zonasLibres,
                             instruccionSecreta: result.hayEspacio ? "SÍ HAY LUGAR. Ofrécele al cliente en qué zonas prefieren sentarse mencionando los nombres de las zonas libres. Cuando te confirmen, guarda la reserva enviando el ID de esa zona." : "NO HAY LUGAR EN NINGUNA ZONA. REGLA ESTRICTA: Las reservas duran 2 horas exactas, ofrécele EXCLUSIVAMENTE saltos de +2 o -2 horas para ver si quiere cambiar de turno."
                         })
@@ -647,11 +648,20 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
             history.push({ role: 'assistant', content: aiText });
         }
 
-        // Límite de memoria (el system prompt es el índice 0)
+        // Límite de memoria inteligente (el system prompt es el índice 0)
         // Guardamos el system + los últimos 14 mensajes
         if (history.length > 15) {
             const systemMessage = history[0];
-            const recentMessages = history.slice(history.length - 14);
+            let recentMessages = history.slice(history.length - 14);
+
+            // MAGIA ANTI-CRASH: Si el primer mensaje reciente que quedó cortado 
+            // es un 'tool', significa que borramos su 'tool_calls' correspondiente.
+            // La API de OpenAI odia eso y crashea. Si pasa eso, borramos ese 'tool' huérfano.
+            while (recentMessages.length > 0 && recentMessages[0].role === 'tool') {
+                console.log('🧹 Limpieza de memoria: Eliminando mensaje tool huérfano para evitar crash.');
+                recentMessages.shift(); // Saca el primer elemento
+            }
+
             history.length = 0; // Vaciar array original manteniendo referencia
             history.push(systemMessage, ...recentMessages);
         }
@@ -663,5 +673,80 @@ async function getOpenAIResponse(chatId, userMessage, phoneNumber) {
     }
 }
 
+// Función para limpiar reservas expiradas y archivarlas en Supabase
+async function cleanupExpiredReservations() {
+    try {
+        // Obtener reservas confirmadas
+        const { data: reservas, error: err } = await supabase
+            .from('reservas')
+            .select('*')
+            .in('estado', ['confirmada', 'pendiente']);
+
+        if (err) {
+            console.error('❌ Error obteniendo reservas para limpieza:', err);
+            return;
+        }
+
+        // Obtener la hora actual en Madrid para comparar correctamente
+        const nowMadrid = new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Madrid" }));
+
+        // Filtrar reservas cuyo fin es anterior a ahora
+        const expiradas = reservas.filter(r => {
+            if (!r.fecha || !r.hora_fin) return false;
+            // Aseguramos formato ISO: "YYYY-MM-DDTHH:mm:ss"
+            const isoStr = `${r.fecha}T${r.hora_fin.includes(':') && r.hora_fin.split(':').length === 2 ? r.hora_fin + ':00' : r.hora_fin}`;
+            const endDate = new Date(isoStr);
+
+            if (isNaN(endDate.getTime())) {
+                console.error(`⚠️ Fecha inválida para reserva ${r.id}: ${isoStr}`);
+                return false;
+            }
+            return endDate < nowMadrid;
+        });
+
+        console.log(`🔍 Escaneando: ${reservas.length} reservas activas. Expelidas para hoy y antes de ahora: ${expiradas.length}`);
+
+        if (expiradas.length === 0) return;
+
+        // Archivar en tabla historial (Explicitando columnas para evitar errores de estructura)
+        const { error: insertErr } = await supabase
+            .from('reservas_historial')
+            .insert(expiradas.map(r => ({
+                nombre: r.nombre,
+                fecha: r.fecha,
+                hora_inicio: r.hora_inicio,
+                hora_fin: r.hora_fin,
+                personas: r.personas,
+                telefono: r.telefono,
+                zona_id: r.zona_id,
+                mesa_id: r.mesa_id,
+                estado: r.estado,
+                fecha_archivado: new Date().toISOString()
+            })));
+
+        if (insertErr) {
+            console.error('❌ Error archivando reservas expiradas:', insertErr);
+        }
+
+        // Eliminar reservas expiradas
+        const ids = expiradas.map(r => r.id);
+        const { error: delErr } = await supabase
+            .from('reservas')
+            .delete()
+            .in('id', ids);
+
+        if (delErr) {
+            console.error('❌ Error eliminando reservas expiradas:', delErr);
+        } else {
+            console.log(`✅ Limpieza: ${expiradas.length} reserva(s) archivada(s) y eliminada(s).`);
+        }
+    } catch (e) {
+        console.error('❌ Excepción en cleanupExpiredReservations:', e);
+    }
+}
+
 // Inicializar el cliente
 client.initialize();
+
+// Ejecutar limpieza cada 1 minuto (para mayor precisión)
+setInterval(cleanupExpiredReservations, 60 * 1000);
